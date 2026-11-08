@@ -1,146 +1,555 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Syntiox Raw Tracker - Downloader</title>
-    <style>
-        body { 
-            background: #000; 
-            color: #0f0; 
-            font-family: 'Courier New', Courier, monospace; 
-            padding: 20px; 
-            line-height: 1.4;
-        }
-        .container { border: 1px solid #0f0; padding: 20px; border-radius: 5px; position: relative; }
-        h1 { color: #fff; border-bottom: 2px solid #0f0; padding-bottom: 10px; }
-        pre { 
-            white-space: pre-wrap; 
-            word-wrap: break-word; 
-            background: #111; 
-            padding: 15px; 
-            border-radius: 5px;
-            font-size: 13px;
-            max-height: 500px;
-            overflow-y: auto;
-        }
-        .loading { color: yellow; font-weight: bold; }
-        .error { color: red; }
-        
-        /* බටන් එකේ ස්ටයිල් එක */
-        .btn {
-            background: #0f0;
-            color: #000;
-            border: none;
-            padding: 10px 20px;
-            font-weight: bold;
-            cursor: pointer;
-            margin-bottom: 10px;
-            border-radius: 3px;
-            font-family: inherit;
-        }
-        .btn:disabled {
-            background: #333;
-            color: #666;
-            cursor: not-allowed;
-        }
-        .btn:hover:not(:disabled) {
-            background: #0c0;
-        }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>Syntiox Intelligence — Browser Diagnostics</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; background: #050806; color: #dcffe5; line-height: 1.55; }
+    main { width: min(1100px, 100%); margin: 0 auto; border: 1px solid #1b7439; border-radius: 12px; padding: 24px; background: #09110c; box-shadow: 0 0 40px #00ff6610; }
+    h1 { margin-top: 0; color: #fff; font-size: clamp(23px, 4vw, 34px); }
+    p, li { color: #b7c9bc; }
+    .notice { border: 1px solid #365b3c; border-radius: 8px; padding: 14px; background: #0d1b11; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+    button { border: 0; border-radius: 6px; padding: 11px 16px; font: inherit; font-weight: 700; cursor: pointer; background: #25e66a; color: #041008; }
+    button.secondary { background: #23352a; color: #dcffe5; border: 1px solid #496a52; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    #status { min-height: 28px; margin: 12px 0; color: #f5e88a; }
+    pre { max-height: 65vh; overflow: auto; padding: 16px; border-radius: 8px; background: #020403; border: 1px solid #243c2a; color: #a4ffbd; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+    small { color: #8fa895; }
+    a { color: #81f5a4; }
+  </style>
 </head>
 <body>
+<main>
+  <h1>Syntiox Intelligence</h1>
+  <p>Browser, device, network and website performance diagnostics.</p>
 
-<div class="container">
-    <h1>Gimhan's Raw Data Collector</h1>
-    
-    <button id="download-btn" class="btn" disabled>Download JSON</button>
-    
-    <div id="status" class="loading">දත්ත ලබා ගනිමින් පවතිනවා (Fetching Data)...</div>
-    <pre id="display-area"></pre>
-</div>
+  <section class="notice" aria-label="Data collection notice">
+    <strong>Before you collect:</strong>
+    <p>This diagnostic page sends technical information to its own <code>/api/raw</code> endpoint, including browser capabilities, display details, network hints, page-performance metrics, request metadata, your public IP address and approximate IP-based location. It does not collect passwords, cookies, authorization tokens, clipboard contents, browsing history or data from other tabs.</p>
+    <p>Precise device location is separate and is only requested when you press the location button and approve the browser prompt. The API code returns the data but does not save it to a database.</p>
+  </section>
+
+  <div class="actions">
+    <button id="collect-btn" type="button">Collect Diagnostics</button>
+    <button id="location-btn" class="secondary" type="button">Share Precise Location (Optional)</button>
+    <button id="download-btn" class="secondary" type="button" disabled>Download JSON</button>
+  </div>
+
+  <div id="status" role="status" aria-live="polite">Ready. Press “Collect Diagnostics” to start.</div>
+  <pre id="display-area">No diagnostics collected yet.</pre>
+  <small>Some browser APIs are unavailable, restricted, or return approximate values. Missing fields are reported as null, false, unsupported, or unavailable.</small>
+</main>
 
 <script>
-    let capturedData = null; // ඩේටා ටික store කරගන්න variable එකක්
+(() => {
+  'use strict';
 
-    async function getEverything() {
-        const display = document.getElementById('display-area');
-        const status = document.getElementById('status');
-        const downloadBtn = document.getElementById('download-btn');
+  let capturedData = null;
+  let preciseLocation = null;
+  const display = document.getElementById('display-area');
+  const status = document.getElementById('status');
+  const collectButton = document.getElementById('collect-btn');
+  const locationButton = document.getElementById('location-btn');
+  const downloadButton = document.getElementById('download-btn');
+  const pageErrors = [];
 
-        try {
-            // 1. Browser ඩේටා ටික ගමු
-            let browserInfo = {};
-            for (let prop in navigator) {
-                try {
-                    if (typeof navigator[prop] !== 'function') {
-                        browserInfo[prop] = navigator[prop];
-                    }
-                } catch(e) {}
-            }
+  function safe(value, fallback = null) {
+    return value === undefined || value === null ? fallback : value;
+  }
 
-            // 2. සර්වර් එකෙන් එන දත්ත ගමු
-            const response = await fetch('/api/raw');
-            
-            if (!response.ok) {
-                throw new Error(`Server Response Error: ${response.status}`);
-            }
+  function safeErrorText(value) {
+    return String(value || 'Unknown error')
+      .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, '$1[REDACTED]')
+      .replace(/((?:token|secret|password|api[_-]?key|authorization)=)[^&\s]+/gi, '$1[REDACTED]')
+      .slice(0, 300);
+  }
 
-            const serverInfo = await response.json();
-
-            // 3. දෙකම එකතු කරලා Mega Object එක හදමු
-            capturedData = {
-                message: "Syntiox Intelligence Captured",
-                timestamp: new Date().toISOString(),
-                serverSide: serverInfo,
-                clientSide: {
-                    navigator: browserInfo,
-                    screen: {
-                        w: window.screen.width,
-                        h: window.screen.height,
-                        color: window.screen.colorDepth
-                    },
-                    location: window.location.href
-                }
-            };
-
-            // පේජ් එකේ පෙන්වමු
-            status.innerHTML = "✅ සාර්ථකව දත්ත ලබා ගත්තා:";
-            status.classList.remove('loading');
-            display.innerText = JSON.stringify(capturedData, null, 4);
-            
-            // දත්ත ලෝඩ් වුණාට පස්සේ බටන් එක එනේබල් කරමු
-            downloadBtn.disabled = false;
-
-        } catch (err) {
-            status.innerHTML = "❌ අවුලක් වුණා: " + err.message;
-            status.classList.add('error');
-            console.error(err);
-        }
+  function cleanPageUrl(value) {
+    try {
+      const url = new URL(value, location.href);
+      return `${url.origin}${url.pathname}`; // omit query strings and fragments
+    } catch {
+      return null;
     }
+  }
 
-    // JSON එක බාගත කරන Function එක
-    document.getElementById('download-btn').addEventListener('click', () => {
-        if (!capturedData) return;
+  function getMediaPreferences() {
+    const queries = {
+      darkMode: '(prefers-color-scheme: dark)',
+      reducedMotion: '(prefers-reduced-motion: reduce)',
+      highContrast: '(prefers-contrast: more)',
+      forcedColors: '(forced-colors: active)',
+      coarsePointer: '(pointer: coarse)',
+      finePointer: '(pointer: fine)',
+      hover: '(hover: hover)',
+    };
+    const result = {};
+    for (const [key, query] of Object.entries(queries)) {
+      try { result[key] = matchMedia(query).matches; }
+      catch { result[key] = null; }
+    }
+    return result;
+  }
 
-        // JSON එක Blob එකක් බවට හරවනවා
-        const blob = new Blob([JSON.stringify(capturedData, null, 4)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        
-        // තාවකාලිකව Link එකක් හදලා ක්ලික් කරනවා
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `visitor_data_${new Date().getTime()}.json`;
-        document.body.appendChild(a);
-        a.click();
-        
-        // පස්සේ ඒ ලින්ක් එක අයින් කරනවා
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+  function getWebGLDiagnostics() {
+    const canvas = document.createElement('canvas');
+    let gl = null;
+    let context = null;
+    try {
+      gl = canvas.getContext('webgl2');
+      context = gl ? 'webgl2' : null;
+      if (!gl) {
+        gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        context = gl ? 'webgl' : null;
+      }
+      if (!gl) return { supported: false, context: null, vendor: null, renderer: null, version: null, shadingLanguageVersion: null };
+
+      let vendor = null;
+      let renderer = null;
+      try {
+        const debug = gl.getExtension('WEBGL_debug_renderer_info');
+        if (debug) {
+          vendor = gl.getParameter(debug.UNMASKED_VENDOR_WEBGL);
+          renderer = gl.getParameter(debug.UNMASKED_RENDERER_WEBGL);
+        }
+      } catch { /* GPU details may be privacy-restricted. */ }
+
+      return {
+        supported: true,
+        context,
+        vendor,
+        renderer,
+        version: safe(gl.getParameter(gl.VERSION)),
+        shadingLanguageVersion: safe(gl.getParameter(gl.SHADING_LANGUAGE_VERSION)),
+        maxTextureSize: safe(gl.getParameter(gl.MAX_TEXTURE_SIZE)),
+        maxRenderbufferSize: safe(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)),
+      };
+    } catch (error) {
+      return { supported: false, error: String(error?.message || error).slice(0, 160) };
+    } finally {
+      try { const extension = gl?.getExtension('WEBGL_lose_context'); extension?.loseContext(); } catch {}
+    }
+  }
+
+  async function getPermissionStates() {
+    const names = ['geolocation', 'notifications', 'camera', 'microphone', 'clipboard-read', 'clipboard-write', 'persistent-storage'];
+    const result = {};
+    if (!navigator.permissions?.query) return { supported: false, states: result };
+    for (const name of names) {
+      try {
+        const permission = await navigator.permissions.query({ name });
+        result[name] = permission.state; // querying state does not request permission
+      } catch {
+        result[name] = 'unsupported-or-unavailable';
+      }
+    }
+    return { supported: true, states: result };
+  }
+
+  async function getStorageDiagnostics() {
+    const result = {
+      localStorageAvailable: false,
+      sessionStorageAvailable: false,
+      indexedDBAvailable: 'indexedDB' in window,
+      cacheStorageAvailable: 'caches' in window,
+      estimate: null,
+      persisted: null,
+    };
+    try {
+      const key = `__syntiox_test_${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(key, '1'); localStorage.removeItem(key);
+      result.localStorageAvailable = true;
+    } catch {}
+    try {
+      const key = `__syntiox_test_${Math.random().toString(36).slice(2)}`;
+      sessionStorage.setItem(key, '1'); sessionStorage.removeItem(key);
+      result.sessionStorageAvailable = true;
+    } catch {}
+    try {
+      if (navigator.storage?.estimate) {
+        const estimate = await navigator.storage.estimate();
+        result.estimate = {
+          usageBytes: safe(estimate.usage),
+          quotaBytes: safe(estimate.quota),
+          usageDetails: safe(estimate.usageDetails),
+        };
+      }
+    } catch {}
+    try {
+      if (navigator.storage?.persisted) result.persisted = await navigator.storage.persisted();
+    } catch {}
+    return result;
+  }
+
+  async function getUserAgentData() {
+    if (!navigator.userAgentData) return null;
+    const lowEntropy = {
+      brands: safe(navigator.userAgentData.brands),
+      mobile: safe(navigator.userAgentData.mobile),
+      platform: safe(navigator.userAgentData.platform),
+    };
+    try {
+      const high = await navigator.userAgentData.getHighEntropyValues([
+        'architecture', 'bitness', 'model', 'platformVersion', 'uaFullVersion', 'fullVersionList', 'wow64'
+      ]);
+      return { ...lowEntropy, highEntropy: high };
+    } catch {
+      return { ...lowEntropy, highEntropy: null };
+    }
+  }
+
+  function getNetworkInformation() {
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (!connection) return { supported: false };
+    return {
+      supported: true,
+      effectiveType: safe(connection.effectiveType),
+      type: safe(connection.type),
+      downlinkMbps: safe(connection.downlink),
+      downlinkMaxMbps: safe(connection.downlinkMax),
+      rttMs: safe(connection.rtt),
+      saveData: safe(connection.saveData),
+    };
+  }
+
+  function getPerformanceDiagnostics() {
+    if (!window.performance) return { supported: false };
+    const navigation = performance.getEntriesByType?.('navigation')?.[0];
+    const navigationData = navigation ? {
+      type: safe(navigation.type),
+      redirectCount: safe(navigation.redirectCount),
+      durationMs: safe(navigation.duration),
+      domInteractiveMs: safe(navigation.domInteractive),
+      domContentLoadedMs: safe(navigation.domContentLoadedEventEnd),
+      loadEventMs: safe(navigation.loadEventEnd),
+      requestStartMs: safe(navigation.requestStart),
+      responseStartMs: safe(navigation.responseStart),
+      responseEndMs: safe(navigation.responseEnd),
+      dnsLookupMs: Math.max(0, navigation.domainLookupEnd - navigation.domainLookupStart),
+      tcpConnectMs: Math.max(0, navigation.connectEnd - navigation.connectStart),
+      tlsHandshakeMs: navigation.secureConnectionStart ? Math.max(0, navigation.connectEnd - navigation.secureConnectionStart) : null,
+      transferSizeBytes: safe(navigation.transferSize),
+      encodedBodySizeBytes: safe(navigation.encodedBodySize),
+      decodedBodySizeBytes: safe(navigation.decodedBodySize),
+      protocol: safe(navigation.nextHopProtocol),
+    } : null;
+
+    const resources = (performance.getEntriesByType?.('resource') || []).slice(-100).map((entry) => ({
+      url: cleanPageUrl(entry.name),
+      initiatorType: safe(entry.initiatorType),
+      durationMs: safe(entry.duration),
+      dnsLookupMs: entry.domainLookupEnd ? Math.max(0, entry.domainLookupEnd - entry.domainLookupStart) : null,
+      tcpConnectMs: entry.connectEnd ? Math.max(0, entry.connectEnd - entry.connectStart) : null,
+      responseStartMs: safe(entry.responseStart),
+      responseEndMs: safe(entry.responseEnd),
+      transferSizeBytes: safe(entry.transferSize),
+      encodedBodySizeBytes: safe(entry.encodedBodySize),
+      decodedBodySizeBytes: safe(entry.decodedBodySize),
+      protocol: safe(entry.nextHopProtocol),
+    }));
+
+    const paint = (performance.getEntriesByType?.('paint') || []).map(entry => ({ name: entry.name, startTimeMs: entry.startTime }));
+    const largestContentfulPaint = (performance.getEntriesByType?.('largest-contentful-paint') || []).slice(-1).map(entry => ({ startTimeMs: entry.startTime, renderTimeMs: safe(entry.renderTime), loadTimeMs: safe(entry.loadTime), size: safe(entry.size) }));
+    const layoutShifts = (performance.getEntriesByType?.('layout-shift') || []).map(entry => ({ value: entry.value, hadRecentInput: entry.hadRecentInput }));
+    const longTasks = (performance.getEntriesByType?.('longtask') || []).slice(-30).map(entry => ({ startTimeMs: entry.startTime, durationMs: entry.duration }));
+
+    const memory = performance.memory ? {
+      usedJSHeapSizeBytes: safe(performance.memory.usedJSHeapSize),
+      totalJSHeapSizeBytes: safe(performance.memory.totalJSHeapSize),
+      jsHeapSizeLimitBytes: safe(performance.memory.jsHeapSizeLimit),
+    } : null;
+
+    return {
+      supported: true,
+      timeOrigin: safe(performance.timeOrigin),
+      navigation: navigationData,
+      paint,
+      largestContentfulPaint,
+      layoutShifts,
+      longTasks,
+      jsMemory: memory,
+      resources,
+      resourceCount: performance.getEntriesByType?.('resource')?.length || 0,
+      resourceEntriesIncluded: resources.length,
+    };
+  }
+
+  async function getMediaDeviceCounts() {
+    if (!navigator.mediaDevices?.enumerateDevices) return { supported: false };
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return {
+        supported: true,
+        countsByKind: devices.reduce((counts, device) => {
+          counts[device.kind] = (counts[device.kind] || 0) + 1;
+          return counts;
+        }, {}),
+        // Device IDs and labels are deliberately not collected.
+      };
+    } catch (error) {
+      return { supported: true, error: String(error?.message || error).slice(0, 160) };
+    }
+  }
+
+  function getScreenAndViewport() {
+    const screenObject = window.screen;
+    const vv = window.visualViewport;
+    return {
+      screen: {
+        width: safe(screenObject?.width),
+        height: safe(screenObject?.height),
+        availWidth: safe(screenObject?.availWidth),
+        availHeight: safe(screenObject?.availHeight),
+        colorDepth: safe(screenObject?.colorDepth),
+        pixelDepth: safe(screenObject?.pixelDepth),
+        orientation: screenObject?.orientation ? {
+          type: safe(screenObject.orientation.type),
+          angle: safe(screenObject.orientation.angle),
+        } : null,
+      },
+      viewport: {
+        innerWidth: safe(window.innerWidth),
+        innerHeight: safe(window.innerHeight),
+        outerWidth: safe(window.outerWidth),
+        outerHeight: safe(window.outerHeight),
+        documentClientWidth: safe(document.documentElement?.clientWidth),
+        documentClientHeight: safe(document.documentElement?.clientHeight),
+        devicePixelRatio: safe(window.devicePixelRatio),
+        visualViewport: vv ? {
+          width: safe(vv.width),
+          height: safe(vv.height),
+          scale: safe(vv.scale),
+          offsetLeft: safe(vv.offsetLeft),
+          offsetTop: safe(vv.offsetTop),
+        } : null,
+      },
+    };
+  }
+
+  function getDocumentDiagnostics() {
+    const queryKeys = [...new Set([...new URL(location.href).searchParams.keys()])];
+    return {
+      url: cleanPageUrl(location.href),
+      queryParameterNames: queryKeys,
+      referrer: document.referrer ? cleanPageUrl(document.referrer) : null,
+      title: document.title,
+      language: document.documentElement?.lang || null,
+      characterSet: document.characterSet,
+      contentType: document.contentType,
+      readyState: document.readyState,
+      visibilityState: document.visibilityState,
+      compatMode: document.compatMode,
+      documentHasFocus: document.hasFocus(),
+      scriptsCount: document.scripts?.length ?? null,
+      imagesCount: document.images?.length ?? null,
+      linksCount: document.links?.length ?? null,
+      stylesheetsCount: document.styleSheets?.length ?? null,
+    };
+  }
+
+  function getFeatureSupport() {
+    return {
+      fetch: 'fetch' in window,
+      promises: 'Promise' in window,
+      webAssembly: 'WebAssembly' in window,
+      serviceWorker: 'serviceWorker' in navigator,
+      sharedWorker: 'SharedWorker' in window,
+      webWorker: 'Worker' in window,
+      webSocket: 'WebSocket' in window,
+      webRTC: 'RTCPeerConnection' in window,
+      webGL: !!(document.createElement('canvas').getContext('webgl') || document.createElement('canvas').getContext('webgl2')),
+      webGPU: 'gpu' in navigator,
+      bluetooth: 'bluetooth' in navigator,
+      usb: 'usb' in navigator,
+      serial: 'serial' in navigator,
+      hid: 'hid' in navigator,
+      xr: 'xr' in navigator,
+      mediaDevices: !!navigator.mediaDevices,
+      geolocation: 'geolocation' in navigator,
+      clipboardApi: 'clipboard' in navigator,
+      broadcastChannel: 'BroadcastChannel' in window,
+      indexedDB: 'indexedDB' in window,
+      cacheStorage: 'caches' in window,
+      visualViewport: 'visualViewport' in window,
+      resizeObserver: 'ResizeObserver' in window,
+      intersectionObserver: 'IntersectionObserver' in window,
+      mutationObserver: 'MutationObserver' in window,
+      cssGrid: !!window.CSS?.supports?.('display', 'grid'),
+      cssFlex: !!window.CSS?.supports?.('display', 'flex'),
+      cssContainerQueries: !!window.CSS?.supports?.('container-type', 'inline-size'),
+    };
+  }
+
+  function getErrorDiagnostics() {
+    return pageErrors.slice(-30);
+  }
+
+  window.addEventListener('error', (event) => {
+    pageErrors.push({
+      type: 'error',
+      message: safeErrorText(event.message || 'Resource or script error'),
+      source: event.filename ? cleanPageUrl(event.filename) : null,
+      line: safe(event.lineno),
+      column: safe(event.colno),
+      timestamp: new Date().toISOString(),
     });
+  });
 
-    window.onload = getEverything;
+  window.addEventListener('unhandledrejection', (event) => {
+    pageErrors.push({
+      type: 'unhandledrejection',
+      reason: safeErrorText(event.reason?.message || event.reason || 'Unhandled rejection'),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  async function requestPreciseLocation() {
+    if (!navigator.geolocation) {
+      status.textContent = 'This browser does not support Geolocation.';
+      return;
+    }
+    locationButton.disabled = true;
+    status.textContent = 'Waiting for browser location permission…';
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        preciseLocation = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyMeters: position.coords.accuracy,
+          altitudeMeters: safe(position.coords.altitude),
+          altitudeAccuracyMeters: safe(position.coords.altitudeAccuracy),
+          headingDegrees: safe(position.coords.heading),
+          speedMetersPerSecond: safe(position.coords.speed),
+          capturedAt: new Date(position.timestamp).toISOString(),
+          source: 'browser geolocation; user approved',
+        };
+        status.textContent = 'Precise location approved for this capture. Press Collect Diagnostics.';
+        locationButton.textContent = 'Precise Location Ready';
+        locationButton.disabled = false;
+      },
+      (error) => {
+        preciseLocation = null;
+        const reasons = { 1: 'Permission denied', 2: 'Position unavailable', 3: 'Location request timed out' };
+        status.textContent = `Precise location not obtained: ${reasons[error.code] || error.message}`;
+        locationButton.disabled = false;
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 }
+    );
+  }
+
+  async function collectDiagnostics() {
+    collectButton.disabled = true;
+    downloadButton.disabled = true;
+    status.textContent = 'Collecting browser diagnostics…';
+    display.textContent = '';
+
+    try {
+      const uaData = await getUserAgentData();
+      const permissionStates = await getPermissionStates();
+      const storage = await getStorageDiagnostics();
+      const mediaDevices = await getMediaDeviceCounts();
+
+      const clientData = {
+        consent: {
+          userInitiated: true,
+          action: 'Collect Diagnostics button',
+          capturedAt: new Date().toISOString(),
+          preciseLocationRequestedSeparately: Boolean(preciseLocation),
+        },
+        browser: {
+          userAgent: safe(navigator.userAgent),
+          appVersion: safe(navigator.appVersion),
+          appName: safe(navigator.appName),
+          vendor: safe(navigator.vendor),
+          platform: safe(navigator.platform),
+          product: safe(navigator.product),
+          language: safe(navigator.language),
+          languages: safe(navigator.languages),
+          cookieEnabled: safe(navigator.cookieEnabled),
+          doNotTrack: safe(navigator.doNotTrack),
+          webdriver: safe(navigator.webdriver),
+          pdfViewerEnabled: safe(navigator.pdfViewerEnabled),
+          userAgentData: uaData,
+        },
+        device: {
+          hardwareConcurrency: safe(navigator.hardwareConcurrency),
+          deviceMemoryGB: safe(navigator.deviceMemory),
+          maxTouchPoints: safe(navigator.maxTouchPoints),
+          touchSupported: 'ontouchstart' in window || (navigator.maxTouchPoints || 0) > 0,
+          cpuPerformanceHint: safe(navigator.cpuPerformance),
+        },
+        locale: {
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
+          utcOffsetMinutes: new Date().getTimezoneOffset(),
+          intlLocale: Intl.DateTimeFormat().resolvedOptions().locale || null,
+          calendar: Intl.DateTimeFormat().resolvedOptions().calendar || null,
+          numberingSystem: Intl.DateTimeFormat().resolvedOptions().numberingSystem || null,
+        },
+        display: getScreenAndViewport(),
+        network: getNetworkInformation(),
+        mediaPreferences: getMediaPreferences(),
+        permissions: permissionStates,
+        storage,
+        mediaDevices,
+        graphics: getWebGLDiagnostics(),
+        features: getFeatureSupport(),
+        document: getDocumentDiagnostics(),
+        performance: getPerformanceDiagnostics(),
+        errors: getErrorDiagnostics(),
+        location: {
+          ipBasedLocationNote: 'Approximate IP geolocation is supplied separately by the server.',
+          precise: preciseLocation,
+        },
+      };
+
+      status.textContent = 'Sending diagnostics to the same-origin Vercel API…';
+      const started = performance.now();
+      const response = await fetch('/api/raw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        credentials: 'same-origin',
+        body: JSON.stringify({ clientData }),
+      });
+      const roundTripMs = Math.round(performance.now() - started);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `API request failed (${response.status})`);
+
+      result.clientSide.collectionRoundTripMs = roundTripMs;
+      capturedData = result;
+      display.textContent = JSON.stringify(capturedData, null, 2);
+      status.textContent = 'Diagnostics collected successfully.';
+      downloadButton.disabled = false;
+    } catch (error) {
+      status.textContent = `Collection failed: ${error?.message || error}`;
+      display.textContent = String(error?.stack || error);
+    } finally {
+      collectButton.disabled = false;
+    }
+  }
+
+  function downloadJson() {
+    if (!capturedData) return;
+    const blob = new Blob([JSON.stringify(capturedData, null, 2)], { type: 'application/json;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = `syntiox_diagnostics_${Date.now()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
+
+  collectButton.addEventListener('click', collectDiagnostics);
+  locationButton.addEventListener('click', requestPreciseLocation);
+  downloadButton.addEventListener('click', downloadJson);
+})();
 </script>
-
 </body>
 </html>
